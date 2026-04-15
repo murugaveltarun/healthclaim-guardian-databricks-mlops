@@ -1,0 +1,5 @@
+databricks-connect==14.3.0 
+faker
+scikit-learn
+mlflow
+pandas

@@ -1,0 +1,66 @@
+bundle:
+  name: healthclaim_guardian
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: "https://adb-7405610641612330.10.azuredatabricks.net/"
+
+resources:
+  jobs:
+    healthclaim_pipeline:
+      name: "HealthClaim_Guardian_EndToEnd"
+      
+      tasks:
+        # NEW VALIDATION TASK
+        - task_key: "env_setup_check"
+          libraries: &job_libraries
+            - pypi: { package: "faker" }
+            - pypi: { package: "scikit-learn" }
+            - pypi: { package: "mlflow" }
+            - pypi: { package: "pandas" }
+          existing_cluster_id: "0409-125523-8dr7mmxn"
+          spark_python_task:
+            python_file: "src/validate_env.py"
+
+        - task_key: "ingest_bronze"
+          depends_on:
+            - task_key: "env_setup_check" # Now depends on validation
+          libraries: *job_libraries
+          existing_cluster_id: "0409-125523-8dr7mmxn"
+          spark_python_task:
+            python_file: "src/ingest/generate_bronze.py"
+
+        - task_key: "clean_silver"
+          depends_on:
+            - task_key: "ingest_bronze"
+          libraries: *job_libraries
+          existing_cluster_id: "0409-125523-8dr7mmxn"
+          spark_python_task:
+            python_file: "src/process/silver_cleansing.py"
+
+        - task_key: "feature_eng"
+          depends_on:
+            - task_key: "clean_silver"
+          libraries: *job_libraries
+          existing_cluster_id: "0409-125523-8dr7mmxn"
+          spark_python_task:
+            python_file: "src/mlops/feature_engineering.py"
+
+        - task_key: "train_model"
+          depends_on:
+            - task_key: "feature_eng"
+          libraries: *job_libraries
+          existing_cluster_id: "0409-125523-8dr7mmxn"
+          spark_python_task:
+            python_file: "src/mlops/train_model.py"
+
+        - task_key: "gold_output"
+          depends_on:
+            - task_key: "train_model"
+          libraries: *job_libraries
+          existing_cluster_id: "0409-125523-8dr7mmxn"
+          spark_python_task:
+            python_file: "src/process/gold_aggregation.py"

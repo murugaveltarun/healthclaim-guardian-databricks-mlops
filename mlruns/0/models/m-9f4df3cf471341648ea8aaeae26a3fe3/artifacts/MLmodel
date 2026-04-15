@@ -1,0 +1,23 @@
+artifact_path: file:C:/Users/TarunMurugavelV/OneDrive - Synergech Technology Solutions/Documents/health_ins_2/healthclaim_guardian/mlruns/0/models/m-9f4df3cf471341648ea8aaeae26a3fe3/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.13.12
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.8.0
+    skops_trusted_types: null
+mlflow_version: 3.11.1
+model_id: m-9f4df3cf471341648ea8aaeae26a3fe3
+model_size_bytes: 36799
+model_uuid: m-9f4df3cf471341648ea8aaeae26a3fe3
+prompts: null
+run_id: 1c8c09fba3fe4675898e21eed3da2af8
+utc_time_created: '2026-04-10 11:25:44.844570'
