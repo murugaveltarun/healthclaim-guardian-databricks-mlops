@@ -57,9 +57,7 @@ resources:
       job_clusters:
         - job_cluster_key: job_cluster
           new_cluster:
-            spark_version: 16.4.x-scala2.12
+            spark_version: 15.4.x-scala2.12
             node_type_id: Standard_D4ds_v4
+            num_workers: 0  # Single-node cluster (driver only)
             data_security_mode: SINGLE_USER
-            autoscale:
-              min_workers: 1
-              max_workers: 4

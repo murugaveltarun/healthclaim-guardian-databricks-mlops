@@ -14,10 +14,6 @@
 bundle:
   name: healthclaim_guardian
 
-include:
-  - ../src/**/*.py
-  - ../healthclaim_guardian/**/*.py
-
 variables:
   # Environment variables for the workflow
   catalog:
@@ -72,11 +68,8 @@ resources:
         - job_cluster_key: "shared_cluster"
           new_cluster:
             spark_version: "15.4.x-scala2.12"
-            node_type_id: "Standard_DS3_v2"
-            num_workers: 4
-            autoscale:
-              min_workers: 2
-              max_workers: 8
+            node_type_id: "Standard_D4ds_v4"
+            num_workers: 0  # Single-node cluster (driver only)
             cluster_log_conf:
               dbfs:
                 destination: "dbfs:/logs/healthclaim_guardian/"

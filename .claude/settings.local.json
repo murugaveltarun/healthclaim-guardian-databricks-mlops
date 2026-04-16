@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(databricks bundle *)",
+      "Bash(databricks jobs *)",
+      "Bash(databricks clusters *)",
+      "Bash(python3 -c \"import sys,json; data=json.load\\(sys.stdin\\); [print\\(j['id'], j['settings']['name']\\) for j in data.get\\('jobs',[]\\)]\")",
+      "Bash(databricks auth *)",
+      "Bash(databricks workspace)",
+      "Bash(databricks workspace *)"
+    ]
+  }
+}

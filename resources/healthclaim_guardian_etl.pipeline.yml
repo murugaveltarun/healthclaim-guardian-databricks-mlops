@@ -76,11 +76,9 @@ resources:
       # Cluster configuration
       clusters:
         - label: "default"
-          autoscale:
-            min_workers: 2
-            max_workers: 8
-          node_type_id: "Standard_DS3_v2"
+          node_type_id: "Standard_D4ds_v4"
           spark_version: "15.4.x-scala2.12"
+          num_workers: 0  # Single-node cluster (driver only)
 
           # Spark configuration
           spark_conf:
@@ -106,35 +104,13 @@ targets:
     mode: development
     variables:
       num_records: "10000"
-    pipelines:
-      healthclaim_guardian_etl:
-        clusters:
-          - label: "default"
-            autoscale:
-              min_workers: 1
-              max_workers: 4
 
   staging:
     mode: development
     variables:
       num_records: "100000"
-    pipelines:
-      healthclaim_guardian_etl:
-        clusters:
-          - label: "default"
-            autoscale:
-              min_workers: 2
-              max_workers: 8
 
   prod:
     mode: production
     variables:
       num_records: "1000000"
-    pipelines:
-      healthclaim_guardian_etl:
-        clusters:
-          - label: "default"
-            autoscale:
-              min_workers: 4
-              max_workers: 16
-            node_type_id: "Standard_DS4_v2"  # Larger instances
