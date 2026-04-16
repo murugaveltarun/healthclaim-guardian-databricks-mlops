@@ -1,19 +1,140 @@
-# The main pipeline for healthclaim_guardian
+# Healthclaim Guardian ETL Pipeline Configuration
+#
+# This pipeline orchestrates the complete fraud detection workflow:
+# 1. Bronze ingestion (raw data)
+# 2. Silver cleansing (data quality)
+# 3. Feature engineering (ML features)
+# 4. Model training (anomaly detection)
+# 5. Gold layer (fraud predictions)
+#
+# For full workflow orchestration, see: healthclaim_guardian.workflow.yml
+
+bundle:
+  name: healthclaim_guardian_etl
+
+variables:
+  # Target environment configuration
+  catalog:
+    description: "Unity Catalog name"
+    default: "healthclaim_guardian"
+  schema:
+    description: "Schema/Database name"
+    default: "default"
+
+  # Pipeline parameters
+  num_records:
+    description: "Number of records to process"
+    default: "10000"
+  run_training:
+    description: "Whether to run model training"
+    default: "true"
 
 resources:
   pipelines:
     healthclaim_guardian_etl:
-      name: healthclaim_guardian_etl
+      name: "healthclaim_guardian_etl"
       catalog: ${var.catalog}
       schema: ${var.schema}
-      root_path: "../src/healthclaim_guardian_etl"
 
+      # Root path for pipeline libraries
+      root_path: "/Shared/healthclaim_guardian"
+
+      # Libraries to include in the pipeline
       libraries:
+        # Main pipeline stages
         - glob:
-            include: ../src/healthclaim_guardian_etl/transformations/**
+            include: ../src/ingest/*.py
+        - glob:
+            include: ../src/process/*.py
+        - glob:
+            include: ../src/mlops/*.py
+        - glob:
+            include: ../src/healthclaim_guardian/*.py
 
+      # Environment configuration
       environment:
         dependencies:
-          # We include every dependency defined by pyproject.toml by defining an editable environment
-          # that points to the folder where pyproject.toml is deployed.
+          # Install from pyproject.toml
           - --editable ${workspace.file_path}
+
+      # Pipeline configuration
+      configuration:
+        # Data generation settings
+        pipeline.num_records: ${var.num_records}
+        pipeline.dirty_ratio: "0.10"
+        pipeline.max_billed: "50000.0"
+
+        # ML settings
+        ml.n_clusters: "3"
+        ml.random_state: "42"
+        ml.anomaly_threshold: "1.1"
+
+        # Registry settings
+        model.registry_name: "healthclaim_fraud_detector"
+        mlflow.experiment_path: "/healthclaim_fraud"
+
+      # Cluster configuration
+      clusters:
+        - label: "default"
+          autoscale:
+            min_workers: 2
+            max_workers: 8
+          node_type_id: "Standard_DS3_v2"
+          spark_version: "15.4.x-scala2.12"
+
+          # Spark configuration
+          spark_conf:
+            spark.sql.adaptive.enabled: "true"
+            spark.sql.adaptive.coalescePartitions.enabled: "true"
+            spark.sql.adaptive.skewJoin.enabled: "true"
+
+          # Environment variables
+          spark_env_vars:
+            DATABRICKS_CATALOG: ${var.catalog}
+            DATABRICKS_SCHEMA: ${var.schema}
+            PIPELINE_NUM_RECORDS: ${var.num_records}
+
+      # Photon acceleration (for better performance)
+      photon: true
+
+      # Channel (for Delta Live Tables)
+      channel: "current"
+
+# Deployment targets
+targets:
+  dev:
+    mode: development
+    variables:
+      num_records: "10000"
+    pipelines:
+      healthclaim_guardian_etl:
+        clusters:
+          - label: "default"
+            autoscale:
+              min_workers: 1
+              max_workers: 4
+
+  staging:
+    mode: development
+    variables:
+      num_records: "100000"
+    pipelines:
+      healthclaim_guardian_etl:
+        clusters:
+          - label: "default"
+            autoscale:
+              min_workers: 2
+              max_workers: 8
+
+  prod:
+    mode: production
+    variables:
+      num_records: "1000000"
+    pipelines:
+      healthclaim_guardian_etl:
+        clusters:
+          - label: "default"
+            autoscale:
+              min_workers: 4
+              max_workers: 16
+            node_type_id: "Standard_DS4_v2"  # Larger instances

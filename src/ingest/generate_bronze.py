@@ -1,73 +1,185 @@
+"""
+Bronze Layer Ingestion - Generate synthetic healthcare claims data.
+
+This module generates synthetic medical claims data with intentional data quality issues
+for testing the fraud detection pipeline. In production, this would be replaced by
+real data ingestion from healthcare providers, claims systems, or HL7/FHIR APIs.
+
+Data Quality Issues Injected:
+- Negative billing amounts (data entry errors)
+- Extreme outliers (100x normal values)
+- Invalid diagnosis codes
+- NULL values in required fields
+"""
+
 import random
+from typing import List, Tuple
 from faker import Faker
 from databricks.connect import DatabricksSession
-from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType
+from pyspark.sql.types import (
+    StructType,
+    StructField,
+    StringType,
+    DoubleType,
+    TimestampType,
+)
 
-# 1. Initialize Databricks Connect Session
-# This seamlessly bridges your local VS Code to your cloud cluster
-spark = DatabricksSession.builder.getOrCreate()
-fake = Faker()
+from healthclaim_guardian.config import get_pipeline_config, get_full_table_name
+from healthclaim_guardian.logging_config import setup_logger
+from healthclaim_guardian.secrets import setup_databricks_auth
+
+logger = setup_logger(__name__)
 
 
-def generate_messy_claims(num_records=10000):
-    """Generates synthetic medical claims with intentional dirty data."""
+def generate_messy_claims(
+    num_records: int = 10000,
+    dirty_ratio: float = 0.10,
+) -> List[Tuple]:
+    """
+    Generate synthetic medical claims with intentional dirty data.
+
+    Args:
+        num_records: Number of records to generate
+        dirty_ratio: Fraction of records with data quality issues
+
+    Returns:
+        List of tuples containing claim data
+    """
     data = []
     hospitals = [f"HOSP-{str(i).zfill(3)}" for i in range(1, 11)]
-    valid_icd10 = ["J01.90", "E11.9", "I10", "M54.5", "NULL"]  # Includes deliberate NULLs
+    valid_icd10 = ["J01.90", "E11.9", "I10", "M54.5", "Z00.00", "R53.83"]
 
-    for _ in range(num_records):
-        # 90% clean data, 10% dirty data (negative amounts, extreme values)
-        is_dirty = random.random() < 0.10
+    for i in range(num_records):
+        is_dirty = random.random() < dirty_ratio
 
-        claim_id = fake.uuid4()
-        patient_id = fake.uuid4()
+        claim_id = f"CLM-{i:08d}"
+        patient_id = f"PAT-{random.randint(1, 5000):05d}"
         hospital_id = random.choice(hospitals)
-        diagnosis_code = random.choice(valid_icd10) if not is_dirty else "INVALID-CODE-999"
 
-        # Inject negative billing amounts or massive outliers for dirty data
-        billed_amount = round(random.uniform(100.0, 5000.0), 2)
+        # Inject invalid diagnosis codes for dirty data
         if is_dirty:
-            billed_amount = random.choice([billed_amount * -1, billed_amount * 100])
+            diagnosis_code = random.choice(["INVALID-CODE-999", "BAD-ICD", ""])
+        else:
+            diagnosis_code = random.choice(valid_icd10)
 
-        status = random.choice(["PENDING", "APPROVED", "DENIED"])
+        # Generate billed amount with potential issues
+        base_amount = round(random.uniform(100.0, 5000.0), 2)
+        if is_dirty:
+            issue_type = random.choice(["negative", "extreme", "zero"])
+            if issue_type == "negative":
+                billed_amount = round(-1 * random.uniform(100, 5000), 2)
+            elif issue_type == "extreme":
+                billed_amount = round(base_amount * 100, 2)  # 100x multiplier
+            else:
+                billed_amount = 0.0
+        else:
+            billed_amount = base_amount
 
-        data.append((claim_id, patient_id, hospital_id, diagnosis_code, billed_amount, status))
+        # Claim status with realistic distribution
+        status_weights = [0.3, 0.5, 0.2]  # 30% pending, 50% approved, 20% denied
+        status = random.choices(["PENDING", "APPROVED", "DENIED"], weights=status_weights)[0]
+
+        data.append((
+            claim_id,
+            patient_id,
+            hospital_id,
+            diagnosis_code,
+            billed_amount,
+            status,
+        ))
 
     return data
 
 
-def main():
-    print("Generating synthetic healthcare claims data...")
-    raw_data = generate_messy_claims(10000)
-
-    # Define PySpark Schema
-    schema = StructType(
+def create_schema() -> StructType:
+    """Create PySpark schema for bronze claims table."""
+    return StructType(
         [
-            StructField("claim_id", StringType(), False),
-            StructField("patient_id", StringType(), False),
-            StructField("hospital_id", StringType(), True),
-            StructField("diagnosis_code", StringType(), True),
-            StructField("billed_amount", DoubleType(), True),
-            StructField("claim_status", StringType(), True),
+            StructField("claim_id", StringType(), nullable=False),
+            StructField("patient_id", StringType(), nullable=False),
+            StructField("hospital_id", StringType(), nullable=True),
+            StructField("diagnosis_code", StringType(), nullable=True),
+            StructField("billed_amount", DoubleType(), nullable=True),
+            StructField("claim_status", StringType(), nullable=True),
         ]
     )
 
+
+def ingest_bronze_data(
+    num_records: int = None,
+    dirty_ratio: float = None,
+    overwrite: bool = True,
+) -> int:
+    """
+    Main ingestion function for bronze layer.
+
+    Args:
+        num_records: Number of records to generate (default from config)
+        dirty_ratio: Fraction of dirty data (default from config)
+        overwrite: Whether to overwrite existing table
+
+    Returns:
+        Number of records ingested
+    """
+    # Load configuration
+    config = get_pipeline_config()
+    num_records = num_records or config.num_records
+    dirty_ratio = dirty_ratio or config.dirty_data_ratio
+
+    logger.info(f"Starting bronze ingestion: {num_records} records, {dirty_ratio:.1%} dirty data")
+
+    # Initialize Spark session
+    try:
+        spark = DatabricksSession.builder.getOrCreate()
+        logger.info("Databricks session initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize Databricks session: {e}")
+        raise
+
+    # Generate synthetic data
+    logger.info("Generating synthetic claims data...")
+    raw_data = generate_messy_claims(num_records, dirty_ratio)
+
     # Create DataFrame
+    schema = create_schema()
     df = spark.createDataFrame(raw_data, schema=schema)
 
-    # Write out to Unity Catalog / Hive Metastore as a Bronze Delta Table
-    # Ensure your cluster has permissions to create databases/tables in this catalog
-    database_name = "healthclaim_guardian.default"
-    table_name = "insurance_bronze_claims"
-    full_table_path = f"{database_name}.{table_name}"
+    # Get table name
+    table_name = get_full_table_name(config.table_config.bronze_claims)
+    logger.info(f"Target table: {table_name}")
 
-    print(f"Writing {df.count()} records to Bronze table: {full_table_path}")
+    # Write to Delta table
+    mode = "overwrite" if overwrite else "append"
+    logger.info(f"Writing {df.count()} records to {table_name} (mode={mode})")
 
-    df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(full_table_path)
+    try:
+        df.write.format("delta").mode(mode).saveAsTable(table_name)
+        logger.info(f"Bronze ingestion complete: {df.count()} records written")
+    except Exception as e:
+        logger.error(f"Failed to write bronze table: {e}")
+        raise
 
-    print("Bronze ingestion complete. Sample data:")
+    # Show sample data
+    logger.info("Sample data from bronze layer:")
     df.show(5)
+
+    return df.count()
+
+
+def main():
+    """Entry point for bronze ingestion."""
+    try:
+        # Attempt to set up auth from secrets (optional, falls back to env vars)
+        setup_databricks_auth()
+
+        record_count = ingest_bronze_data()
+        logger.info(f"Bronze ingestion completed successfully: {record_count} records")
+        return 0
+
+    except Exception as e:
+        logger.exception(f"Bronze ingestion failed: {e}")
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    exit(main())

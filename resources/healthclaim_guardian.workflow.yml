@@ -1,0 +1,163 @@
+# Databricks Workflow Definition for Healthclaim Guardian
+#
+# This workflow orchestrates the complete fraud detection pipeline:
+# 1. Bronze Ingestion - Generate/sync raw claims data
+# 2. Silver Cleansing - Clean and validate data
+# 3. Feature Engineering - Create ML features
+# 4. Model Training - Train and register anomaly detection model
+# 5. Gold Layer - Apply model to detect anomalies
+#
+# Usage:
+#   databricks bundle deploy
+#   databricks run job --job-name healthclaim_guardian_pipeline
+
+bundle:
+  name: healthclaim_guardian
+
+include:
+  - ../src/**/*.py
+  - ../healthclaim_guardian/**/*.py
+
+variables:
+  # Environment variables for the workflow
+  catalog:
+    description: "Unity Catalog for data storage"
+    default: "healthclaim_guardian"
+  schema:
+    description: "Schema/Database name"
+    default: "default"
+  environment:
+    description: "Environment (dev, staging, prod)"
+    default: "dev"
+  num_records:
+    description: "Number of records to generate (for synthetic data)"
+    default: "10000"
+  run_training:
+    description: "Whether to run model training"
+    default: "true"
+
+targets:
+  dev:
+    variables:
+      environment: "dev"
+      num_records: "10000"
+    mode: development
+
+  staging:
+    variables:
+      environment: "staging"
+      num_records: "100000"
+    mode: development
+
+  prod:
+    variables:
+      environment: "prod"
+      num_records: "1000000"
+    mode: production
+
+resources:
+  jobs:
+    healthclaim_guardian_pipeline:
+      name: "healthclaim_guardian_pipeline"
+      description: "Complete healthcare claims fraud detection pipeline"
+
+      # Schedule (disabled by default in dev, enabled in prod)
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"  # Daily at 2 AM
+        timezone_id: "America/New_York"
+        pause_status: "${if eq(var.environment 'prod' 'paused' 'active')}"
+
+      # Job clusters (shared across tasks for efficiency)
+      job_clusters:
+        - job_cluster_key: "shared_cluster"
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 4
+            autoscale:
+              min_workers: 2
+              max_workers: 8
+            cluster_log_conf:
+              dbfs:
+                destination: "dbfs:/logs/healthclaim_guardian/"
+            spark_env_vars:
+              DATABRICKS_CATALOG: "${var.catalog}"
+              DATABRICKS_SCHEMA: "${var.schema}"
+              PIPELINE_NUM_RECORDS: "${var.num_records}"
+
+      # Pipeline tasks
+      tasks:
+        # Task 1: Bronze Layer Ingestion
+        - task_key: "ingest_bronze"
+          job_cluster_key: "shared_cluster"
+          python_wheel_task:
+            package_name: "healthclaim_guardian"
+            entry_point: "ingest_bronze"
+          timeout_seconds: 1800
+          max_retries: 2
+          retry_on_timeout: true
+
+        # Task 2: Silver Layer Cleansing (depends on Bronze)
+        - task_key: "cleanse_silver"
+          depends_on:
+            - task_key: "ingest_bronze"
+          job_cluster_key: "shared_cluster"
+          python_wheel_task:
+            package_name: "healthclaim_guardian"
+            entry_point: "cleanse_silver"
+          timeout_seconds: 1800
+          max_retries: 2
+
+        # Task 3: Feature Engineering (depends on Silver)
+        - task_key: "engineer_features"
+          depends_on:
+            - task_key: "cleanse_silver"
+          job_cluster_key: "shared_cluster"
+          python_wheel_task:
+            package_name: "healthclaim_guardian"
+            entry_point: "engineer_features"
+          timeout_seconds: 1800
+          max_retries: 2
+
+        # Task 4: Model Training (depends on Features, optional)
+        - task_key: "train_model"
+          depends_on:
+            - task_key: "engineer_features"
+          job_cluster_key: "shared_cluster"
+          python_wheel_task:
+            package_name: "healthclaim_guardian"
+            entry_point: "train_model"
+          timeout_seconds: 3600
+          max_retries: 1
+          condition_task:
+            op: "EQUAL_TO"
+            left: "${var.run_training}"
+            right: "true"
+
+        # Task 5: Gold Layer Anomaly Detection (depends on Training)
+        - task_key: "detect_anomalies"
+          depends_on:
+            - task_key: "train_model"
+          job_cluster_key: "shared_cluster"
+          python_wheel_task:
+            package_name: "healthclaim_guardian"
+            entry_point: "detect_anomalies"
+          timeout_seconds: 1800
+          max_retries: 2
+
+      # Notifications
+      health:
+        - email_notifications:
+            on_failure:
+              - "alerts@synergech.com"
+            on_start:
+              - "ml-team@synergech.com"
+            on_success:
+              - "ml-team@synergech.com"
+
+      # Tags for organization
+      tags:
+        project: "healthclaim_guardian"
+        team: "ml-engineering"
+        cost_center: "fraud-detection"
+        environment: "${var.environment}"
